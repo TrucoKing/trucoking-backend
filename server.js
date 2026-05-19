@@ -188,6 +188,13 @@ app.get('/admin/usuarios', async (req, res) => {
   res.json(r.rows);
 });
 
+
+app.get('/admin/transacoes', async (req, res) => {
+  if (req.headers["x-admin-key"] !== process.env.ADMIN_KEY) return res.status(403).json({ erro: "Negado" });
+  const r = await db.query("SELECT t.id,u.nome,u.email,t.tipo,t.valor,t.status,t.pix_chave,t.criado_em FROM transacoes t LEFT JOIN users u ON t.user_id=u.id ORDER BY t.criado_em DESC LIMIT 200");
+  res.json(r.rows);
+});
+
 setup()
   .then(() => app.listen(port, () => console.log('OK porta ' + port)))
   .catch(e => { console.error(e); process.exit(1); });
