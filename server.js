@@ -18,8 +18,9 @@ const db = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN, options: { timeout: 5000 } });
+const mpConfig = new MercadoPagoConfig({ accessToken: 'APP_USR-7180881355997944-051911-f987ebd26c899159efb1dc824d1e43f5-1735282174', options: { timeout: 5000 } });
 const mp = new Payment(mpConfig);
+
 
 console.log('MP Token:', process.env.MP_ACCESS_TOKEN ? process.env.MP_ACCESS_TOKEN.substring(0,20) + '...' : 'NAO DEFINIDO');
 
