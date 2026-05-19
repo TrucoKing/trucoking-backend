@@ -18,7 +18,12 @@ const db = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const mp = new Payment(new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN }));
+const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN, options: { timeout: 5000 } });
+const mp = new Payment(mpConfig);
+
+console.log('MP Token:', process.env.MP_ACCESS_TOKEN ? process.env.MP_ACCESS_TOKEN.substring(0,20) + '...' : 'NAO DEFINIDO');
+
+console.log("MP Token inicio:", process.env.MP_ACCESS_TOKEN ? process.env.MP_ACCESS_TOKEN.substring(0,20) + "..." : "NAO DEFINIDO");
 
 async function setup() {
   await db.query(`CREATE TABLE IF NOT EXISTS users(
