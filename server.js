@@ -114,7 +114,7 @@ app.post('/deposito/criar', auth, async (req, res) => {
         description: 'TrucoKing',
         payment_method_id: 'pix',
         payer: { email: req.user.email },
-        metadata: { user_id: req.user.id }
+        metadata: { user_id: String(req.user.id) }
       }
     });
     const qr_code = p?.point_of_interaction?.transaction_data?.qr_code;
@@ -126,11 +126,7 @@ app.post('/deposito/criar', auth, async (req, res) => {
       'INSERT INTO transacoes(user_id,tipo,valor,status,mp_payment_id) VALUES($1,$2,$3,$4,$5) RETURNING id',
       [req.user.id, 'deposito', valor, 'pendente', String(p.id)]
     );
-    res.json({
-      transacao_id: t.rows[0].id,
-      qr_code,
-      valor
-    });
+    res.json({ transacao_id: t.rows[0].id, qr_code, valor });
   } catch (e) {
     console.error('Erro deposito:', e);
     res.status(500).json({ erro: 'Erro pix: ' + (e.message || 'desconhecido') });
@@ -146,27 +142,43 @@ app.get('/deposito/status/:id', auth, async (req, res) => {
   res.json(r.rows[0]);
 });
 
+// ✅ WEBHOOK CORRIGIDO - aceita payment.updated e payment.created
 app.post('/webhook/mp', async (req, res) => {
   res.sendStatus(200);
   try {
     const body = req.body;
     console.log('Webhook recebido:', JSON.stringify(body));
-    if (body.type !== 'payment') return;
-    const p = await mp.get({ id: body.data.id });
+    
+    // Aceita tanto 'payment' type quanto action payment.updated/created
+    const isPayment = body.type === 'payment' || 
+                      body.action === 'payment.updated' || 
+                      body.action === 'payment.created';
+    if (!isPayment) return;
+    
+    const paymentId = body.data && body.data.id;
+    if (!paymentId) return;
+
+    const p = await mp.get({ id: paymentId });
     console.log('Payment status:', p.status, 'user_id:', p.metadata?.user_id);
+    
     if (p.status !== 'approved') return;
-    const uid = p.metadata && p.metadata.user_id;
-    if (!uid) { console.error('Webhook sem user_id!'); return; }
+    
+    // user_id pode vir como string ou number
+    const uid = p.metadata && (p.metadata.user_id || p.metadata['user_id']);
+    if (!uid) { console.error('Webhook sem user_id! metadata:', JSON.stringify(p.metadata)); return; }
+    
     const v = p.transaction_amount;
     const mid = String(p.id);
+    
     const ex = await db.query(
       'SELECT id FROM transacoes WHERE mp_payment_id=$1 AND status=$2',
       [mid, 'aprovado']
     );
-    if (ex.rows.length) return;
+    if (ex.rows.length) { console.log('Pagamento ja processado:', mid); return; }
+    
     await db.query('UPDATE users SET saldo=saldo+$1 WHERE id=$2', [v, uid]);
     await db.query('UPDATE transacoes SET status=$1 WHERE mp_payment_id=$2', ['aprovado', mid]);
-    console.log('Saldo creditado! user:', uid, 'valor:', v);
+    console.log('✅ Saldo creditado! user:', uid, 'valor:', v);
   } catch (e) {
     console.error('Erro webhook:', e);
   }
@@ -205,6 +217,22 @@ app.get('/admin/transacoes', async (req, res) => {
   if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY) return res.status(403).json({ erro: 'Negado' });
   const r = await db.query('SELECT t.id,u.nome,u.email,t.tipo,t.valor,t.status,t.pix_chave,t.criado_em FROM transacoes t LEFT JOIN users u ON t.user_id=u.id ORDER BY t.criado_em DESC LIMIT 200');
   res.json(r.rows);
+});
+
+// ✅ NOVA ROTA - Admin creditar saldo manualmente
+app.post('/admin/creditar', async (req, res) => {
+  if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY) return res.status(403).json({ erro: 'Negado' });
+  const { email, valor } = req.body;
+  if (!email || !valor) return res.status(400).json({ erro: 'Email e valor obrigatorios' });
+  try {
+    const r = await db.query('UPDATE users SET saldo=saldo+$1 WHERE email=$2 RETURNING id,nome,email,saldo', [valor, email]);
+    if (!r.rows[0]) return res.status(404).json({ erro: 'Usuario nao encontrado' });
+    await db.query('INSERT INTO transacoes(user_id,tipo,valor,status) VALUES($1,$2,$3,$4)', [r.rows[0].id, 'deposito', valor, 'aprovado']);
+    console.log('Admin creditou:', email, 'valor:', valor);
+    res.json({ ok: true, user: r.rows[0] });
+  } catch (e) {
+    res.status(500).json({ erro: 'Erro ao creditar' });
+  }
 });
 
 setup()
