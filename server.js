@@ -18,12 +18,10 @@ const db = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-const mpConfig = new MercadoPagoConfig({ accessToken: 'APP_USR-7180881355997944-051911-f987ebd26c899159efb1dc824d1e43f5-1735282174', options: { timeout: 5000 } });
+const mpConfig = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN, options: { timeout: 5000 } });
 const mp = new Payment(mpConfig);
 
 console.log('MP Token:', process.env.MP_ACCESS_TOKEN ? process.env.MP_ACCESS_TOKEN.substring(0,20) + '...' : 'NAO DEFINIDO');
-
-console.log("MP Token inicio:", process.env.MP_ACCESS_TOKEN ? process.env.MP_ACCESS_TOKEN.substring(0,20) + "..." : "NAO DEFINIDO");
 
 async function setup() {
   await db.query(`CREATE TABLE IF NOT EXISTS users(
@@ -119,18 +117,23 @@ app.post('/deposito/criar', auth, async (req, res) => {
         metadata: { user_id: req.user.id }
       }
     });
+    const qr_code = p?.point_of_interaction?.transaction_data?.qr_code;
+    if (!qr_code) {
+      console.error('MP sem qr_code:', JSON.stringify(p));
+      return res.status(500).json({ erro: 'PIX nao gerado pelo Mercado Pago' });
+    }
     const t = await db.query(
       'INSERT INTO transacoes(user_id,tipo,valor,status,mp_payment_id) VALUES($1,$2,$3,$4,$5) RETURNING id',
       [req.user.id, 'deposito', valor, 'pendente', String(p.id)]
     );
     res.json({
       transacao_id: t.rows[0].id,
-      qr_code: p.point_of_interaction.transaction_data.qr_code,
+      qr_code,
       valor
     });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ erro: 'Erro pix' });
+    console.error('Erro deposito:', e);
+    res.status(500).json({ erro: 'Erro pix: ' + (e.message || 'desconhecido') });
   }
 });
 
@@ -145,11 +148,15 @@ app.get('/deposito/status/:id', auth, async (req, res) => {
 
 app.post('/webhook/mp', async (req, res) => {
   res.sendStatus(200);
-  if (req.body.type !== 'payment') return;
   try {
-    const p = await mp.get({ id: req.body.data.id });
+    const body = req.body;
+    console.log('Webhook recebido:', JSON.stringify(body));
+    if (body.type !== 'payment') return;
+    const p = await mp.get({ id: body.data.id });
+    console.log('Payment status:', p.status, 'user_id:', p.metadata?.user_id);
     if (p.status !== 'approved') return;
     const uid = p.metadata && p.metadata.user_id;
+    if (!uid) { console.error('Webhook sem user_id!'); return; }
     const v = p.transaction_amount;
     const mid = String(p.id);
     const ex = await db.query(
@@ -159,8 +166,9 @@ app.post('/webhook/mp', async (req, res) => {
     if (ex.rows.length) return;
     await db.query('UPDATE users SET saldo=saldo+$1 WHERE id=$2', [v, uid]);
     await db.query('UPDATE transacoes SET status=$1 WHERE mp_payment_id=$2', ['aprovado', mid]);
+    console.log('Saldo creditado! user:', uid, 'valor:', v);
   } catch (e) {
-    console.error(e);
+    console.error('Erro webhook:', e);
   }
 });
 
@@ -193,10 +201,9 @@ app.get('/admin/usuarios', async (req, res) => {
   res.json(r.rows);
 });
 
-
 app.get('/admin/transacoes', async (req, res) => {
-  if (req.headers["x-admin-key"] !== process.env.ADMIN_KEY) return res.status(403).json({ erro: "Negado" });
-  const r = await db.query("SELECT t.id,u.nome,u.email,t.tipo,t.valor,t.status,t.pix_chave,t.criado_em FROM transacoes t LEFT JOIN users u ON t.user_id=u.id ORDER BY t.criado_em DESC LIMIT 200");
+  if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY) return res.status(403).json({ erro: 'Negado' });
+  const r = await db.query('SELECT t.id,u.nome,u.email,t.tipo,t.valor,t.status,t.pix_chave,t.criado_em FROM transacoes t LEFT JOIN users u ON t.user_id=u.id ORDER BY t.criado_em DESC LIMIT 200');
   res.json(r.rows);
 });
 
