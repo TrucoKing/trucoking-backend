@@ -1,32 +1,39 @@
- // ================================================================
+// ================================================================
 // TRUCOKING — BACKEND COMPLETO
 // Node.js + Express + PostgreSQL + Mercado Pago
 // ================================================================
-const express
-const cors
-const bcrypt
-const jwt
-const { Pool }
+
+const express    = require('express');
+const cors       = require('cors');
+const bcrypt     = require('bcrypt');
+const jwt        = require('jsonwebtoken');
+const { Pool }   = require('pg');
 const { MercadoPagoConfig, Payment, MerchantOrder } = require('mercadopago');
 require('dotenv').config();
+
 const app  = express();
 const port = process.env.PORT || 3000;
+
 // Necessário para capturar o IP real do jogador atrás do proxy do Render
 app.set('trust proxy', true);
+
 // ── Middleware ────────────────────────────────────────────────
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
 app.use(express.json());
+
 // ── Banco de dados ────────────────────────────────────────────
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
+
 // ── Mercado Pago ──────────────────────────────────────────────
 const mpClient = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
   options: { timeout: 5000 }
 });
 const mpPayment = new Payment(mpClient);
+
 // ================================================================
 // BANCO DE DADOS — Criar tabelas se não existirem
 // ================================================================
@@ -35,118 +42,84 @@ async function setupDatabase() {
     CREATE TABLE IF NOT EXISTS users (
       id          SERIAL PRIMARY KEY,
       nome        VARCHAR(100) NOT NULL,
-= require('express');
-= require('cors');
-= require('bcrypt');
-= require('jsonwebtoken');
-= require('pg');
- );
-cpf         VARCHAR(14)  UNIQUE NOT NULL,
-email       VARCHAR(150) UNIQUE NOT NULL,
-telefone    VARCHAR(20),
-senha_hash  VARCHAR(255) NOT NULL,
-saldo
-avatar
-criado_em
-DECIMAL(10,2) DEFAULT 0.00, VARCHAR(10) DEFAULT ' ', TIMESTAMP DEFAULT NOW()
- );
-CREATE TABLE IF NOT EXISTS transacoes (
-id
-user_id
-tipo
-valor
-status
-mp_payment_id
-pix_chave
-pix_tipo
-criado_em
-SERIAL PRIMARY KEY,
-INTEGER REFERENCES users(id),
-VARCHAR(20) NOT NULL,   -- 'deposito' | 'saque' | 'vitoria' | 'd
-DECIMAL(10,2) NOT NULL,
-VARCHAR(20) DEFAULT 'pendente', -- 'pendente' | 'aprovado' | 're
-VARCHAR(100),
-VARCHAR(200),
-VARCHAR(20),
-TIMESTAMP DEFAULT NOW()
--- ID do pagamento no Mercado Pago
--- chave pix do usuário (para saque)
--- tipo da chave: cpf | email | telefone
--- Garante a coluna mesmo em bancos já existentes
-ALTER TABLE transacoes ADD COLUMN IF NOT EXISTS pix_tipo VARCHAR(20);
-CREATE TABLE IF NOT EXISTS partidas (
-  id            SERIAL PRIMARY KEY,
-  mesa_valor    DECIMAL(10,2),
-);
-modo
-status
-criado_em
-VARCHAR(20),  -- 'mineiro' | 'paulista'
-VARCHAR(20) DEFAULT 'aberta',
-TIMESTAMP DEFAULT NOW()
-CREATE TABLE IF NOT EXISTS partida_jogadores (
-  id          SERIAL PRIMARY KEY,
-  partida_id  INTEGER REFERENCES partidas(id),
-user_id
-dupla
-ganhou
-ip
-premio
-INTEGER REFERENCES users(id),
-INTEGER,  -- 0 ou 1
-BOOLEAN,
-VARCHAR(60),
-DECIMAL(10,2) DEFAULT 0
-);
-ALTER TABLE partida_jogadores ADD COLUMN IF NOT EXISTS ip VARCHAR(60);
--- ROLETA: estado unico (linha id=1). Acumula lucro e guarda o premio armado.
-CREATE TABLE IF NOT EXISTS roleta_estado (
-id              INTEGER PRIMARY KEY DEFAULT 1,
-errota'
-jeitado
-| alea
+      cpf         VARCHAR(14)  UNIQUE NOT NULL,
+      email       VARCHAR(150) UNIQUE NOT NULL,
+      telefone    VARCHAR(20),
+      senha_hash  VARCHAR(255) NOT NULL,
+      saldo       DECIMAL(10,2) DEFAULT 0.00,
+      avatar      VARCHAR(10)  DEFAULT '😎',
+      criado_em   TIMESTAMP DEFAULT NOW()
+    );
 
- }
-); `);
-lucro_acumulado DECIMAL(12,2) DEFAULT 0,   -- lucro desde o ultimo premio
-DECIMAL(12,2) DEFAULT 20000, -- lucro que libera o premio
-VARCHAR(60),               -- premio armado p/ proximo ciclo
-DECIMAL(12,2) DEFAULT 0,
-VARCHAR(20) DEFAULT 'fisico', -- 'pix' (credita saldo) | 'fisico
-BOOLEAN DEFAULT FALSE,     -- true quando lucro>=gatilho
-gatilho
-premio_nome
-premio_valor
-premio_tipo
-liberado
-premio_pequeno_max DECIMAL(6,2) DEFAULT 0, -- 0 = sem premios pequenos
-custo_giro
-total_giros
-atualizado_em
-DECIMAL(6,2) DEFAULT 0.25,
-BIGINT DEFAULT 0,
-TIMESTAMP DEFAULT NOW()
-);
-INSERT INTO roleta_estado (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
--- ROLETA: registro de cada giro (auditoria + quem ganhou o que)
-CREATE TABLE IF NOT EXISTS roleta_giros (
-SERIAL PRIMARY KEY,
-INTEGER REFERENCES users(id),
-DECIMAL(6,2) NOT NULL,
-DECIMAL(8,2) DEFAULT 0,     -- premio pequeno em dinheiro
-id
-user_id
-custo
-premio_peq
-ganhou_grande BOOLEAN DEFAULT FALSE,
-premio_grande_nome  VARCHAR(60),
-premio_grande_valor DECIMAL(12,2) DEFAULT 0,
-ip criado_em
-console.log('
-  VARCHAR(60),
-  TIMESTAMP DEFAULT NOW()
-Banco de dados configurado!');
- // ================================================================
+    CREATE TABLE IF NOT EXISTS transacoes (
+      id              SERIAL PRIMARY KEY,
+      user_id         INTEGER REFERENCES users(id),
+      tipo            VARCHAR(20) NOT NULL,   -- 'deposito' | 'saque' | 'vitoria' | 'derrota'
+      valor           DECIMAL(10,2) NOT NULL,
+      status          VARCHAR(20) DEFAULT 'pendente', -- 'pendente' | 'aprovado' | 'rejeitado'
+      mp_payment_id   VARCHAR(100),           -- ID do pagamento no Mercado Pago
+      pix_chave       VARCHAR(200),           -- chave pix do usuário (para saque)
+      pix_tipo        VARCHAR(20),            -- tipo da chave: cpf | email | telefone | aleatoria
+      criado_em       TIMESTAMP DEFAULT NOW()
+    );
+
+    -- Garante a coluna mesmo em bancos já existentes
+    ALTER TABLE transacoes ADD COLUMN IF NOT EXISTS pix_tipo VARCHAR(20);
+
+    CREATE TABLE IF NOT EXISTS partidas (
+      id            SERIAL PRIMARY KEY,
+      mesa_valor    DECIMAL(10,2),
+      modo          VARCHAR(20),  -- 'mineiro' | 'paulista'
+      status        VARCHAR(20) DEFAULT 'aberta',
+      criado_em     TIMESTAMP DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS partida_jogadores (
+      id          SERIAL PRIMARY KEY,
+      partida_id  INTEGER REFERENCES partidas(id),
+      user_id     INTEGER REFERENCES users(id),
+      dupla       INTEGER,  -- 0 ou 1
+      ganhou      BOOLEAN,
+      ip          VARCHAR(60),
+      premio      DECIMAL(10,2) DEFAULT 0
+    );
+
+    ALTER TABLE partida_jogadores ADD COLUMN IF NOT EXISTS ip VARCHAR(60);
+
+    -- ROLETA: estado unico (linha id=1). Acumula lucro e guarda o premio armado.
+    CREATE TABLE IF NOT EXISTS roleta_estado (
+      id              INTEGER PRIMARY KEY DEFAULT 1,
+      lucro_acumulado DECIMAL(12,2) DEFAULT 0,   -- lucro desde o ultimo premio
+      gatilho         DECIMAL(12,2) DEFAULT 20000, -- lucro que libera o premio
+      premio_nome     VARCHAR(60),               -- premio armado p/ proximo ciclo
+      premio_valor    DECIMAL(12,2) DEFAULT 0,
+      premio_tipo     VARCHAR(20) DEFAULT 'fisico', -- 'pix' (credita saldo) | 'fisico'
+      liberado        BOOLEAN DEFAULT FALSE,     -- true quando lucro>=gatilho
+      premio_pequeno_max DECIMAL(6,2) DEFAULT 0, -- 0 = sem premios pequenos
+      custo_giro      DECIMAL(6,2) DEFAULT 0.25,
+      total_giros     BIGINT DEFAULT 0,
+      atualizado_em   TIMESTAMP DEFAULT NOW()
+    );
+    INSERT INTO roleta_estado (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+    -- ROLETA: registro de cada giro (auditoria + quem ganhou o que)
+    CREATE TABLE IF NOT EXISTS roleta_giros (
+      id            SERIAL PRIMARY KEY,
+      user_id       INTEGER REFERENCES users(id),
+      custo         DECIMAL(6,2) NOT NULL,
+      premio_peq    DECIMAL(8,2) DEFAULT 0,     -- premio pequeno em dinheiro
+      ganhou_grande BOOLEAN DEFAULT FALSE,
+      premio_grande_nome  VARCHAR(60),
+      premio_grande_valor DECIMAL(12,2) DEFAULT 0,
+      ip            VARCHAR(60),
+      criado_em     TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  console.log('✅ Banco de dados configurado!');
+}
+
+// ================================================================
 // HELPERS
 // ================================================================
 function authMiddleware(req, res, next) {
@@ -159,26 +132,29 @@ function authMiddleware(req, res, next) {
     res.status(401).json({ erro: 'Token inválido' });
   }
 }
+
 // ================================================================
 // ROTAS DE AUTH
 // ================================================================
-'
 
- // POST /auth/cadastro
+// POST /auth/cadastro
 app.post('/auth/cadastro', async (req, res) => {
   const { nome, cpf, email, telefone, senha } = req.body;
+
   if (!nome || !cpf || !email || !senha)
     return res.status(400).json({ erro: 'Campos obrigatórios faltando' });
+
   if (senha.length < 6)
     return res.status(400).json({ erro: 'Senha deve ter pelo menos 6 caracteres' });
+
   try {
     const senhaHash = await bcrypt.hash(senha, 10);
     const result = await db.query(
-      'INSERT INTO users (nome, cpf, email, telefone, senha_hash) VALUES ($1,$2,$3,$4,
+      'INSERT INTO users (nome, cpf, email, telefone, senha_hash) VALUES ($1,$2,$3,$4,$5) RETURNING id, nome, email, saldo, avatar',
       [nome, cpf, email, telefone, senhaHash]
     );
     const user = result.rows[0];
-    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET,
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({ token, user });
   } catch (err) {
     if (err.code === '23505') {
@@ -188,6 +164,7 @@ app.post('/auth/cadastro', async (req, res) => {
     res.status(500).json({ erro: 'Erro ao criar conta' });
   }
 });
+
 // POST /auth/login
 app.post('/auth/login', async (req, res) => {
   const { email, senha } = req.body;
@@ -195,45 +172,48 @@ app.post('/auth/login', async (req, res) => {
     const result = await db.query('SELECT * FROM users WHERE email=$1', [email]);
     const user = result.rows[0];
     if (!user) return res.status(401).json({ erro: 'E-mail ou senha incorretos' });
+
     const ok = await bcrypt.compare(senha, user.senha_hash);
     if (!ok) return res.status(401).json({ erro: 'E-mail ou senha incorretos' });
-    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET,
+
+    const token = jwt.sign({ id: user.id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.json({
-token,
-      user: { id: user.id, nome: user.nome, email: user.email, saldo: user.saldo, avat
+      token,
+      user: { id: user.id, nome: user.nome, email: user.email, saldo: user.saldo, avatar: user.avatar }
     });
   } catch (err) {
     console.error(err);
-$5) RET
-{ expi
-{ expi
-ar: use
-
-     res.status(500).json({ erro: 'Erro ao fazer login' });
+    res.status(500).json({ erro: 'Erro ao fazer login' });
   }
 });
+
 // GET /auth/me — retorna dados do usuário logado
 app.get('/auth/me', authMiddleware, async (req, res) => {
   const result = await db.query(
     'SELECT id, nome, email, saldo, avatar FROM users WHERE id=$1',
     [req.user.id]
-);
+  );
   res.json(result.rows[0]);
 });
+
 // PATCH /auth/avatar — atualiza avatar
 app.patch('/auth/avatar', authMiddleware, async (req, res) => {
   const { avatar } = req.body;
   await db.query('UPDATE users SET avatar=$1 WHERE id=$2', [avatar, req.user.id]);
   res.json({ ok: true, avatar });
 });
+
 // ================================================================
 // ROTAS DE DEPÓSITO (PIX via Mercado Pago)
 // ================================================================
+
 // POST /deposito/criar — gera QR Code Pix
 app.post('/deposito/criar', authMiddleware, async (req, res) => {
   const { valor } = req.body;
+
   if (!valor || valor < 1)
     return res.status(400).json({ erro: 'Valor mínimo: R$ 1,00' });
+
   try {
     // Cria pagamento Pix no Mercado Pago
     const payment = await mpPayment.create({
@@ -248,13 +228,14 @@ app.post('/deposito/criar', authMiddleware, async (req, res) => {
         notification_url: `${process.env.BACKEND_URL}/webhook/mp`,
         metadata: { user_id: req.user.id, tipo: 'deposito' }
       }
-});
+    });
 
-     // Salva transação como pendente
+    // Salva transação como pendente
     const tx = await db.query(
-      'INSERT INTO transacoes (user_id, tipo, valor, status, mp_payment_id) VALUES ($1
+      'INSERT INTO transacoes (user_id, tipo, valor, status, mp_payment_id) VALUES ($1,$2,$3,$4,$5) RETURNING id',
       [req.user.id, 'deposito', valor, 'pendente', String(payment.id)]
     );
+
     res.json({
       transacao_id: tx.rows[0].id,
       qr_code: payment.point_of_interaction.transaction_data.qr_code,
@@ -267,6 +248,7 @@ app.post('/deposito/criar', authMiddleware, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao gerar Pix. Tente novamente.' });
   }
 });
+
 // GET /deposito/status/:txId — verifica status do pagamento
 app.get('/deposito/status/:txId', authMiddleware, async (req, res) => {
   try {
@@ -279,75 +261,86 @@ app.get('/deposito/status/:txId', authMiddleware, async (req, res) => {
     res.json({ status: tx.status, valor: tx.valor });
   } catch (err) {
     res.status(500).json({ erro: 'Erro ao verificar status' });
-} });
+  }
+});
+
 // ================================================================
 // WEBHOOK DO MERCADO PAGO — chamado quando pagamento chega
 // ================================================================
 app.post('/webhook/mp', async (req, res) => {
   res.sendStatus(200); // responde imediatamente para o MP
+
   const { type, data } = req.body;
   if (type !== 'payment') return;
+
   try {
     const payment = await mpPayment.get({ id: data.id });
     if (payment.status !== 'approved') return;
-,$2,$3,
 
- const userId  = payment.metadata?.user_id;
-const tipo
-const valor
-const mpId
-= payment.metadata?.tipo;
-= payment.transaction_amount;
-= String(payment.id);
+    const userId  = payment.metadata?.user_id;
+    const tipo    = payment.metadata?.tipo;
+    const valor   = payment.transaction_amount;
+    const mpId    = String(payment.id);
+
     // Evitar creditar duas vezes
     const existe = await db.query(
       'SELECT id FROM transacoes WHERE mp_payment_id=$1 AND status=$2',
       [mpId, 'aprovado']
     );
     if (existe.rows.length > 0) return;
+
     if (tipo === 'deposito' && userId) {
       // Credita saldo no usuário
-      await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [valor, userId
+      await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [valor, userId]);
       // Atualiza transação
       await db.query(
         'UPDATE transacoes SET status=$1 WHERE mp_payment_id=$2',
         ['aprovado', mpId]
       );
-console.log(` Depósito aprovado: R$ ${valor} para user #${userId}`); }
+      console.log(`✅ Depósito aprovado: R$ ${valor} para user #${userId}`);
+    }
   } catch (err) {
     console.error('Erro no webhook:', err);
-} });
+  }
+});
+
 // ================================================================
 // ROTAS DE SAQUE (Pix de saída via Mercado Pago)
 // ================================================================
+
 // POST /saque/solicitar
 app.post('/saque/solicitar', authMiddleware, async (req, res) => {
   const { valor, pix_chave, pix_tipo } = req.body;
   // pix_tipo: 'cpf' | 'email' | 'telefone' | 'aleatoria'
+
   if (!valor || valor < 20)
     return res.status(400).json({ erro: 'Valor mínimo de saque: R$ 20,00' });
   if (!pix_chave)
     return res.status(400).json({ erro: 'Informe sua chave Pix' });
+
   // Transação atômica: debita saldo e cria solicitação juntos
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    // Trava a linha do usuário para evitar saque duplo simultâneo
- ]);
 
-     const userResult = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPD
+    // Trava a linha do usuário para evitar saque duplo simultâneo
+    const userResult = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
     const saldo = parseFloat(userResult.rows[0].saldo);
+
     if (saldo < valor) {
       await client.query('ROLLBACK');
       return res.status(400).json({ erro: 'Saldo insuficiente' });
-}
-    // Debita o saldo na hora (fica reservado) e registra como PENDENTE para aprovação
-    await client.query('UPDATE users SET saldo = saldo - $1 WHERE id=$2', [valor, req.
+    }
+
+    // Debita o saldo na hora (fica reservado) e registra como PENDENTE para aprovação manual
+    await client.query('UPDATE users SET saldo = saldo - $1 WHERE id=$2', [valor, req.user.id]);
     const tx = await client.query(
-      'INSERT INTO transacoes (user_id, tipo, valor, status, pix_chave, pix_tipo) VALU
+      'INSERT INTO transacoes (user_id, tipo, valor, status, pix_chave, pix_tipo) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',
       [req.user.id, 'saque', valor, 'pendente', pix_chave, pix_tipo || 'aleatoria']
     );
+
     await client.query('COMMIT');
+
     res.json({
       ok: true,
       mensagem: 'Saque solicitado! Será processado em até 24h.',
@@ -359,14 +352,18 @@ app.post('/saque/solicitar', authMiddleware, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao solicitar saque' });
   } finally {
     client.release();
-} });
+  }
+});
+
 // ================================================================
 // ADMIN — Gestão de saques (aprovar / rejeitar manualmente)
 // ================================================================
+
 // GET /admin/saques — lista saques pendentes para você pagar
 app.get('/admin/saques', async (req, res) => {
   if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY)
     return res.status(403).json({ erro: 'Acesso negado' });
+
   const status = req.query.status || 'pendente';
   const r = await db.query(
     `SELECT t.id, t.valor, t.status, t.pix_chave, t.pix_tipo, t.criado_em,
@@ -374,36 +371,35 @@ app.get('/admin/saques', async (req, res) => {
        FROM transacoes t
        JOIN users u ON t.user_id = u.id
       WHERE t.tipo='saque' AND t.status=$1
-ATE', [
- manual
-user.id
-ES ($1,
-
-       ORDER BY t.criado_em ASC`,
+      ORDER BY t.criado_em ASC`,
     [status]
-);
+  );
   res.json(r.rows);
 });
+
 // POST /admin/saques/:id/aprovar — marca como pago (você já fez o Pix manualmente)
 app.post('/admin/saques/:id/aprovar', async (req, res) => {
   if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY)
     return res.status(403).json({ erro: 'Acesso negado' });
+
   const r = await db.query(
-    "UPDATE transacoes SET status='aprovado' WHERE id=$1 AND tipo='saque' AND status='
+    "UPDATE transacoes SET status='aprovado' WHERE id=$1 AND tipo='saque' AND status='pendente' RETURNING id",
     [req.params.id]
   );
-  if (!r.rows[0]) return res.status(404).json({ erro: 'Saque não encontrado ou já proc
+  if (!r.rows[0]) return res.status(404).json({ erro: 'Saque não encontrado ou já processado' });
   res.json({ ok: true, mensagem: 'Saque marcado como pago' });
 });
+
 // POST /admin/saques/:id/rejeitar — recusa e estorna o saldo ao jogador
 app.post('/admin/saques/:id/rejeitar', async (req, res) => {
   if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY)
     return res.status(403).json({ erro: 'Acesso negado' });
+
   const client = await db.connect();
   try {
     await client.query('BEGIN');
     const tx = await client.query(
-      "SELECT user_id, valor FROM transacoes WHERE id=$1 AND tipo='saque' AND status='
+      "SELECT user_id, valor FROM transacoes WHERE id=$1 AND tipo='saque' AND status='pendente' FOR UPDATE",
       [req.params.id]
     );
     if (!tx.rows[0]) {
@@ -411,8 +407,8 @@ app.post('/admin/saques/:id/rejeitar', async (req, res) => {
       return res.status(404).json({ erro: 'Saque não encontrado ou já processado' });
     }
     // Estorna o saldo de volta ao jogador
-    await client.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [tx.rows[0].
-    await client.query("UPDATE transacoes SET status='rejeitado' WHERE id=$1", [req.pa
+    await client.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [tx.rows[0].valor, tx.rows[0].user_id]);
+    await client.query("UPDATE transacoes SET status='rejeitado' WHERE id=$1", [req.params.id]);
     await client.query('COMMIT');
     res.json({ ok: true, mensagem: 'Saque rejeitado e saldo estornado' });
   } catch (err) {
@@ -421,32 +417,33 @@ app.post('/admin/saques/:id/rejeitar', async (req, res) => {
     res.status(500).json({ erro: 'Erro ao rejeitar saque' });
   } finally {
     client.release();
-}
-pendent
-essado'
-pendent
-valor,
-rams.id
+  }
+});
 
- });
 // ================================================================
 // ROTAS DO JOGO
 // ================================================================
+
 // POST /jogo/entrar — debita entrada e cria/entra na partida
 app.post('/jogo/entrar', authMiddleware, async (req, res) => {
   const { mesa_valor, modo } = req.body;
+
   try {
-    const userResult = await db.query('SELECT saldo FROM users WHERE id=$1', [req.user
+    const userResult = await db.query('SELECT saldo FROM users WHERE id=$1', [req.user.id]);
     const saldo = parseFloat(userResult.rows[0].saldo);
+
     if (saldo < mesa_valor)
       return res.status(400).json({ erro: 'Saldo insuficiente' });
+
     // Debita entrada
-    await db.query('UPDATE users SET saldo = saldo - $1 WHERE id=$2', [mesa_valor, req
+    await db.query('UPDATE users SET saldo = saldo - $1 WHERE id=$2', [mesa_valor, req.user.id]);
     await db.query(
       'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
       [req.user.id, 'entrada_mesa', mesa_valor, 'aprovado']
     );
+
     const ip = req.ip || req.headers['x-forwarded-for'] || 'desconhecido';
+
     // ── MATCHMAKING: procura mesa aberta com exatamente 1 humano esperando ──
     // Regra economica: 2 humanos SEMPRE em duplas opostas, para que o premio
     // de um seja bancado pela aposta do outro (casa nunca paga do bolso).
@@ -459,120 +456,127 @@ app.post('/jogo/entrar', authMiddleware, async (req, res) => {
        HAVING COUNT(pj.id) = 1
         LIMIT 1`,
       [mesa_valor, modo]
-);
+    );
+
     let partida_id, dupla;
+
     if (partida.rows.length > 0) {
       // Ja existe 1 humano -> este entra na dupla OPOSTA
       partida_id = partida.rows[0].id;
       const duplaExistente = parseInt(partida.rows[0].dupla_existente, 10);
       dupla = duplaExistente === 0 ? 1 : 0;
-.id]);
-.user.i
 
-     // Antifraude: nao deixa o mesmo usuario/IP ocupar os dois lados
-    const jaNaMesa = await db.query(
-      'SELECT user_id, ip FROM partida_jogadores WHERE partida_id=$1', [partida_id]
-    );
-    const mesmoUsuario = jaNaMesa.rows.some(j => j.user_id === req.user.id);
-    const mesmoIp      = jaNaMesa.rows.some(j => j.ip === ip);
-    if (mesmoUsuario || mesmoIp) {
-      await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [mesa_valor,
-      await db.query(
-        'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)'
-        [req.user.id, 'estorno_entrada', mesa_valor, 'aprovado']
+      // Antifraude: nao deixa o mesmo usuario/IP ocupar os dois lados
+      const jaNaMesa = await db.query(
+        'SELECT user_id, ip FROM partida_jogadores WHERE partida_id=$1', [partida_id]
       );
-console.warn(` Antifraude: bloqueio na mesa ${partida_id} — user ${req.user.
-      return res.status(403).json({ erro: 'Não é possível entrar nesta mesa. Tente o
-    }
-    // Com 2 humanos a mesa fecha para novos humanos (os 2 vazios viram bots)
-    await db.query("UPDATE partidas SET status='completa' WHERE id=$1", [partida_id]
-  } else {
-    // Nenhum humano esperando -> cria mesa nova, este fica na dupla 0
-    const nova = await db.query(
-      'INSERT INTO partidas (mesa_valor, modo) VALUES ($1,$2) RETURNING id',
-      [mesa_valor, modo]
-    );
-    partida_id = nova.rows[0].id;
-dupla = 0; }
-  await db.query(
-    'INSERT INTO partida_jogadores (partida_id, user_id, dupla, ip) VALUES ($1,$2,$3
-    [partida_id, req.user.id, dupla, ip]
-);
-  // Conta humanos confirmados na mesa (1 = jogando contra bots; 2 = duelo real)
-  const cnt = await db.query(
-    'SELECT COUNT(*) FROM partida_jogadores WHERE partida_id=$1', [partida_id]
-  );
-  const humanosNaMesa = parseInt(cnt.rows[0].count, 10);
-  res.json({ ok: true, partida_id, dupla, humanosNaMesa });
-} catch (err) {
-  console.error(err);
-  res.status(500).json({ erro: 'Erro ao entrar na mesa' });
-}
- });
-req.us ,
-id}, i utra.'
-);
-,$4)',
-p
+      const mesmoUsuario = jaNaMesa.rows.some(j => j.user_id === req.user.id);
+      const mesmoIp      = jaNaMesa.rows.some(j => j.ip === ip);
+      if (mesmoUsuario || mesmoIp) {
+        await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [mesa_valor, req.user.id]);
+        await db.query(
+          'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+          [req.user.id, 'estorno_entrada', mesa_valor, 'aprovado']
+        );
+        console.warn(`🚨 Antifraude: bloqueio na mesa ${partida_id} — user ${req.user.id}, ip ${ip}`);
+        return res.status(403).json({ erro: 'Não é possível entrar nesta mesa. Tente outra.' });
+      }
 
- // POST /jogo/resultado — registra resultado e paga vencedores
+      // Com 2 humanos a mesa fecha para novos humanos (os 2 vazios viram bots)
+      await db.query("UPDATE partidas SET status='completa' WHERE id=$1", [partida_id]);
+    } else {
+      // Nenhum humano esperando -> cria mesa nova, este fica na dupla 0
+      const nova = await db.query(
+        'INSERT INTO partidas (mesa_valor, modo) VALUES ($1,$2) RETURNING id',
+        [mesa_valor, modo]
+      );
+      partida_id = nova.rows[0].id;
+      dupla = 0;
+    }
+
+    await db.query(
+      'INSERT INTO partida_jogadores (partida_id, user_id, dupla, ip) VALUES ($1,$2,$3,$4)',
+      [partida_id, req.user.id, dupla, ip]
+    );
+
+    // Conta humanos confirmados na mesa (1 = jogando contra bots; 2 = duelo real)
+    const cnt = await db.query(
+      'SELECT COUNT(*) FROM partida_jogadores WHERE partida_id=$1', [partida_id]
+    );
+    const humanosNaMesa = parseInt(cnt.rows[0].count, 10);
+
+    res.json({ ok: true, partida_id, dupla, humanosNaMesa });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao entrar na mesa' });
+  }
+});
+
+// POST /jogo/resultado — registra resultado e paga vencedores
 app.post('/jogo/resultado', authMiddleware, async (req, res) => {
   const { partida_id, dupla_vencedora } = req.body;
   const TAXA = 0.85; // 85% vai para vencedores, 15% plataforma
+
   try {
-    const partida = await db.query('SELECT * FROM partidas WHERE id=$1', [partida_id])
-    if (!partida.rows[0]) return res.status(404).json({ erro: 'Partida não encontrada'
+    const partida = await db.query('SELECT * FROM partidas WHERE id=$1', [partida_id]);
+    if (!partida.rows[0]) return res.status(404).json({ erro: 'Partida não encontrada' });
+
     const { mesa_valor } = partida.rows[0];
     const totalPot  = mesa_valor * 4;
     const premioPorJogador = (totalPot * TAXA) / 2; // 2 vencedores
+
     const jogadores = await db.query(
       'SELECT * FROM partida_jogadores WHERE partida_id=$1', [partida_id]
-);
+    );
+
     for (const j of jogadores.rows) {
       const ganhou = j.dupla === dupla_vencedora;
       await db.query(
         'UPDATE partida_jogadores SET ganhou=$1, premio=$2 WHERE id=$3',
         [ganhou, ganhou ? premioPorJogador : 0, j.id]
       );
+
       if (ganhou) {
         // Credita prêmio
-        await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [premioPorJo
+        await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [premioPorJogador, j.user_id]);
         await db.query(
-          'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)'
+          'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
           [j.user_id, 'vitoria', premioPorJogador, 'aprovado']
         );
-} }
+      }
+    }
+
     // Fecha partida
-    await db.query("UPDATE partidas SET status='finalizada' WHERE id=$1", [partida_id]
+    await db.query("UPDATE partidas SET status='finalizada' WHERE id=$1", [partida_id]);
+
     res.json({ ok: true, premioPorJogador });
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao registrar resultado' });
   }
 });
+
 // ================================================================
 // ROTAS DE JOGO vs CPU (1 jogador real + 3 bots)
 // Saldo sempre confirmado pelo servidor (fonte da verdade).
-; });
-gador, ,
-);
+// ================================================================
 
- // ================================================================
 // POST /jogo/aposta — debita a aposta ao entrar na mesa
 app.post('/jogo/aposta', authMiddleware, async (req, res) => {
   const valor = parseFloat(req.body.valor);
   if (!valor || valor <= 0) return res.status(400).json({ erro: 'Valor inválido' });
+
   const client = await db.connect();
   try {
     await client.query('BEGIN');
-    const r = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPDATE', [re
+    const r = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
     const saldo = parseFloat(r.rows[0].saldo);
     if (saldo < valor) {
       await client.query('ROLLBACK');
       return res.status(400).json({ erro: 'Saldo insuficiente' });
     }
     const upd = await client.query(
-      'UPDATE users SET saldo = saldo - $1 WHERE id=$2 RETURNING saldo', [valor, req.u
+      'UPDATE users SET saldo = saldo - $1 WHERE id=$2 RETURNING saldo', [valor, req.user.id]
     );
     await client.query(
       'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
@@ -586,28 +590,28 @@ app.post('/jogo/aposta', authMiddleware, async (req, res) => {
     res.status(500).json({ erro: 'Erro ao registrar aposta' });
   } finally {
     client.release();
-} });
+  }
+});
+
 // POST /jogo/estorno — devolve a aposta se a busca for cancelada
 app.post('/jogo/estorno', authMiddleware, async (req, res) => {
   const valor = parseFloat(req.body.valor);
   if (!valor || valor <= 0) return res.status(400).json({ erro: 'Valor inválido' });
   try {
     const upd = await db.query(
-      'UPDATE users SET saldo = saldo + $1 WHERE id=$2 RETURNING saldo', [valor, req.u
+      'UPDATE users SET saldo = saldo + $1 WHERE id=$2 RETURNING saldo', [valor, req.user.id]
     );
     await db.query(
       'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
       [req.user.id, 'estorno_entrada', valor, 'aprovado']
     );
     res.json({ ok: true, saldo: upd.rows[0].saldo });
-q.user.
-ser.id]
-ser.id]
-
-   } catch (err) {
+  } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao estornar' });
-} });
+  }
+});
+
 // POST /jogo/premio — credita o premio ao vencer
 // REGRA ECONOMICA (casa nunca paga do bolso):
 //   pote = aposta * humanosNaMesa   (bots nao colocam dinheiro)
@@ -621,20 +625,25 @@ app.post('/jogo/premio', authMiddleware, async (req, res) => {
   // quantos humanos pagantes estavam na mesa e quantos venceram
   let humanosNaMesa     = parseInt(req.body.humanosNaMesa, 10);
   let humanosVencedores = parseInt(req.body.humanosVencedores, 10);
-  if (!aposta || aposta <= 0) return res.status(400).json({ erro: 'Aposta inválida' })
+
+  if (!aposta || aposta <= 0) return res.status(400).json({ erro: 'Aposta inválida' });
+
   // Sanitiza: no maximo 4 humanos numa mesa de truco, no minimo 1 (o proprio)
-  if (!Number.isInteger(humanosNaMesa) || humanosNaMesa < 1 || humanosNaMesa > 4) huma
-  if (!Number.isInteger(humanosVencedores) || humanosVencedores < 1 || humanosVencedor
+  if (!Number.isInteger(humanosNaMesa) || humanosNaMesa < 1 || humanosNaMesa > 4) humanosNaMesa = 1;
+  if (!Number.isInteger(humanosVencedores) || humanosVencedores < 1 || humanosVencedores > humanosNaMesa) humanosVencedores = 1;
+
   try {
     if (!ganhou) {
       const r = await db.query('SELECT saldo FROM users WHERE id=$1', [req.user.id]);
       return res.json({ ok: true, saldo: r.rows[0].saldo, premio: 0 });
     }
+
     const TAXA = 0.85;
     const pote = aposta * humanosNaMesa;
     const premio = +((pote * TAXA) / humanosVencedores).toFixed(2);
+
     const upd = await db.query(
-      'UPDATE users SET saldo = saldo + $1 WHERE id=$2 RETURNING saldo', [premio, req.
+      'UPDATE users SET saldo = saldo + $1 WHERE id=$2 RETURNING saldo', [premio, req.user.id]
     );
     await db.query(
       'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
@@ -644,21 +653,20 @@ app.post('/jogo/premio', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao creditar prêmio' });
-;
-nosNaMe
-es > hu
-user.id
+  }
+});
 
- } });
 // ================================================================
 // ROTAS DA ROLETA DE PREMIOS
 // Servidor e dono de tudo: debita o giro, acumula lucro, decide o
 // resultado e paga. O premio grande so sai quando o LUCRO bate o gatilho.
 // Assim a casa NUNCA paga do bolso.
 // ================================================================
+
 function adminOk(req) {
   return req.headers['x-admin-key'] === process.env.ADMIN_KEY;
 }
+
 // GET /roleta/estado — jogador ve a barra de progresso (sem dados sensiveis)
 app.get('/roleta/estado', authMiddleware, async (req, res) => {
   try {
@@ -669,109 +677,110 @@ app.get('/roleta/estado', authMiddleware, async (req, res) => {
       gatilho: parseFloat(e.gatilho),
       lucro_acumulado: parseFloat(e.lucro_acumulado),
       progresso: Math.min(1, parseFloat(e.lucro_acumulado) / parseFloat(e.gatilho)),
-      premio_nome: e.premio_nome,        // o premio "armado" e visivel (cria expectat
+      premio_nome: e.premio_nome,        // o premio "armado" e visivel (cria expectativa)
       premio_valor: parseFloat(e.premio_valor),
       total_giros: Number(e.total_giros),
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao ler estado da roleta' });
-} });
+  }
+});
+
 // POST /roleta/girar — o giro (tudo atomico e decidido no servidor)
 app.post('/roleta/girar', authMiddleware, async (req, res) => {
   const client = await db.connect();
   try {
     await client.query('BEGIN');
+
     // trava a linha de estado da roleta (evita corrida entre dois giros simultaneos)
-    const er = await client.query('SELECT * FROM roleta_estado WHERE id=1 FOR UPDATE')
+    const er = await client.query('SELECT * FROM roleta_estado WHERE id=1 FOR UPDATE');
     const E = er.rows[0];
     const custo = parseFloat(E.custo_giro);
     const gatilho = parseFloat(E.gatilho);
     const pequenoMax = parseFloat(E.premio_pequeno_max);
-iva)
-;
 
- // trava o usuario e confere saldo
-const ur = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPDATE', [r
-const saldo = parseFloat(ur.rows[0].saldo);
-if (saldo < custo) {
-  await client.query('ROLLBACK');
-  return res.status(400).json({ erro: 'Saldo insuficiente para girar' });
-}
-// 1) debita o giro
-await client.query('UPDATE users SET saldo = saldo - $1 WHERE id=$2', [custo, req.
-// 2) premio pequeno (opcional). Nunca maior que o custo*X para manter margem.
-//    Distribuicao simples: a maioria 0; as vezes um trocado <= pequenoMax.
-let premioPeq = 0;
-if (pequenoMax > 0) {
-  const rnd = Math.random();
-  if (rnd < 0.15) premioPeq = Math.round((pequenoMax * 0.4) * 100) / 100; // 15% d
-  else if (rnd < 0.20) premioPeq = Math.round(pequenoMax * 100) / 100;    // 5% da
-}
-if (premioPeq > 0) {
-  await client.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [premioPeq
-}
-// 3) lucro deste giro = custo - premio pequeno pago
-const lucroGiro = custo - premioPeq;
-let lucro = parseFloat(E.lucro_acumulado) + lucroGiro;
-// 4) checa o gatilho: se o lucro bateu e ha premio armado, ESTE giro leva o premi
-let ganhouGrande = false, premioGrandeNome = null, premioGrandeValor = 0, premioGr
-const temPremioArmado = E.premio_nome && parseFloat(E.premio_valor) > 0;
-if (lucro >= gatilho && temPremioArmado) {
-  ganhouGrande = true;
-  premioGrandeNome  = E.premio_nome;
-  premioGrandeValor = parseFloat(E.premio_valor);
-  premioGrandeTipo  = E.premio_tipo;
-  // se for PIX, credita no saldo na hora; se for fisico, fica registrado p/ entre
-  if (premioGrandeTipo === 'pix') {
-    await client.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [premioG
-    await client.query(
-      'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)'
-      [req.user.id, 'roleta_premio', premioGrandeValor, 'aprovado']
-    );
-  }
-  // zera o ciclo: desconta o premio do lucro e desarma o premio
-eq.user
-user.id
-as veze
-s vezes
-, req.u
-o grand
-andeTip
-ga manu
-randeVa
-,
+    // trava o usuario e confere saldo
+    const ur = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+    const saldo = parseFloat(ur.rows[0].saldo);
+    if (saldo < custo) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'Saldo insuficiente para girar' });
+    }
 
-       lucro = lucro - premioGrandeValor;
+    // 1) debita o giro
+    await client.query('UPDATE users SET saldo = saldo - $1 WHERE id=$2', [custo, req.user.id]);
+
+    // 2) premio pequeno (opcional). Nunca maior que o custo*X para manter margem.
+    //    Distribuicao simples: a maioria 0; as vezes um trocado <= pequenoMax.
+    let premioPeq = 0;
+    if (pequenoMax > 0) {
+      const rnd = Math.random();
+      if (rnd < 0.15) premioPeq = Math.round((pequenoMax * 0.4) * 100) / 100; // 15% das vezes
+      else if (rnd < 0.20) premioPeq = Math.round(pequenoMax * 100) / 100;    // 5% das vezes
+    }
+    if (premioPeq > 0) {
+      await client.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [premioPeq, req.user.id]);
+    }
+
+    // 3) lucro deste giro = custo - premio pequeno pago
+    const lucroGiro = custo - premioPeq;
+    let lucro = parseFloat(E.lucro_acumulado) + lucroGiro;
+
+    // 4) checa o gatilho: se o lucro bateu e ha premio armado, ESTE giro leva o premio grande
+    let ganhouGrande = false, premioGrandeNome = null, premioGrandeValor = 0, premioGrandeTipo = null;
+    const temPremioArmado = E.premio_nome && parseFloat(E.premio_valor) > 0;
+
+    if (lucro >= gatilho && temPremioArmado) {
+      ganhouGrande = true;
+      premioGrandeNome  = E.premio_nome;
+      premioGrandeValor = parseFloat(E.premio_valor);
+      premioGrandeTipo  = E.premio_tipo;
+
+      // se for PIX, credita no saldo na hora; se for fisico, fica registrado p/ entrega manual
+      if (premioGrandeTipo === 'pix') {
+        await client.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [premioGrandeValor, req.user.id]);
+        await client.query(
+          'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+          [req.user.id, 'roleta_premio', premioGrandeValor, 'aprovado']
+        );
+      }
+
+      // zera o ciclo: desconta o premio do lucro e desarma o premio
+      lucro = lucro - premioGrandeValor;
       if (lucro < 0) lucro = 0;
       await client.query(
-        `UPDATE roleta_estado SET lucro_acumulado=$1, premio_nome=NULL, premio_valor=0
+        `UPDATE roleta_estado SET lucro_acumulado=$1, premio_nome=NULL, premio_valor=0,
          liberado=FALSE, total_giros=total_giros+1, atualizado_em=NOW() WHERE id=1`,
-[lucro] );
+        [lucro]
+      );
     } else {
-      const liberado = lucro >= gatilho; // bateu mas nao ha premio armado: fica "libe
+      const liberado = lucro >= gatilho; // bateu mas nao ha premio armado: fica "liberado" aguardando admin
       await client.query(
         `UPDATE roleta_estado SET lucro_acumulado=$1, liberado=$2,
          total_giros=total_giros+1, atualizado_em=NOW() WHERE id=1`,
         [lucro, liberado]
       );
-}
+    }
+
     // 5) registra o giro (auditoria)
     const ip = req.ip || req.headers['x-forwarded-for'] || 'desconhecido';
     await client.query(
       `INSERT INTO roleta_giros (user_id, custo, premio_peq, ganhou_grande,
        premio_grande_nome, premio_grande_valor, ip)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [req.user.id, custo, premioPeq, ganhouGrande, premioGrandeNome, premioGrandeValo
+      [req.user.id, custo, premioPeq, ganhouGrande, premioGrandeNome, premioGrandeValor, ip]
     );
-    const saldoFinal = await client.query('SELECT saldo FROM users WHERE id=$1', [req.
+
+    const saldoFinal = await client.query('SELECT saldo FROM users WHERE id=$1', [req.user.id]);
     await client.query('COMMIT');
+
     res.json({
       ok: true,
       saldo: parseFloat(saldoFinal.rows[0].saldo),
       premio_pequeno: premioPeq,
       ganhou_grande: ganhouGrande,
-      premio_grande: ganhouGrande ? { nome: premioGrandeNome, valor: premioGrandeValor
+      premio_grande: ganhouGrande ? { nome: premioGrandeNome, valor: premioGrandeValor, tipo: premioGrandeTipo } : null,
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -779,36 +788,34 @@ randeVa
     res.status(500).json({ erro: 'Erro ao girar a roleta' });
   } finally {
     client.release();
-} });
+  }
+});
+
 // --- ADMIN: armar o premio do proximo ciclo e ver o estado ---
 app.get('/admin/roleta', async (req, res) => {
-if (!adminOk(req)) return res.status(401).json({ erro: 'Nao autorizado' });
-,
-rado" a
-r, ip]
-user.id
-, tipo:
-
-   const r = await db.query('SELECT * FROM roleta_estado WHERE id=1');
+  if (!adminOk(req)) return res.status(401).json({ erro: 'Nao autorizado' });
+  const r = await db.query('SELECT * FROM roleta_estado WHERE id=1');
   const ganhadores = await db.query(
-    `SELECT g.id, g.user_id, u.nome, u.email, g.premio_grande_nome, g.premio_grande_va
+    `SELECT g.id, g.user_id, u.nome, u.email, g.premio_grande_nome, g.premio_grande_valor, g.criado_em
        FROM roleta_giros g JOIN users u ON u.id=g.user_id
       WHERE g.ganhou_grande=TRUE ORDER BY g.criado_em DESC LIMIT 50`
   );
   res.json({ estado: r.rows[0], ganhadores: ganhadores.rows });
 });
+
 // POST /admin/roleta/armar — define qual premio sai no proximo gatilho
 // body: { nome, valor, tipo: 'pix'|'fisico' }
 app.post('/admin/roleta/armar', async (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ erro: 'Nao autorizado' });
   const { nome, valor, tipo } = req.body;
-  if (!nome || !valor || valor <= 0) return res.status(400).json({ erro: 'Premio inval
+  if (!nome || !valor || valor <= 0) return res.status(400).json({ erro: 'Premio invalido' });
   await db.query(
-    `UPDATE roleta_estado SET premio_nome=$1, premio_valor=$2, premio_tipo=$3, atualiz
+    `UPDATE roleta_estado SET premio_nome=$1, premio_valor=$2, premio_tipo=$3, atualizado_em=NOW() WHERE id=1`,
     [nome, valor, tipo === 'pix' ? 'pix' : 'fisico']
   );
   res.json({ ok: true, armado: { nome, valor, tipo } });
 });
+
 // POST /admin/roleta/config — ajusta custo do giro, gatilho e premio pequeno maximo
 app.post('/admin/roleta/config', async (req, res) => {
   if (!adminOk(req)) return res.status(401).json({ erro: 'Nao autorizado' });
@@ -824,20 +831,17 @@ app.post('/admin/roleta/config', async (req, res) => {
   const r = await db.query('SELECT * FROM roleta_estado WHERE id=1');
   res.json({ ok: true, estado: r.rows[0] });
 });
+
 // ================================================================
 // ROTAS DE CARTEIRA
 // ================================================================
+
 // GET /carteira — saldo + histórico
 app.get('/carteira', authMiddleware, async (req, res) => {
   try {
-    const saldo = await db.query('SELECT saldo FROM users WHERE id=$1', [req.user.id])
+    const saldo = await db.query('SELECT saldo FROM users WHERE id=$1', [req.user.id]);
     const txs   = await db.query(
-lor, g.
-ido' })
-ado_em=
-;
-
-       'SELECT tipo, valor, status, criado_em FROM transacoes WHERE user_id=$1 ORDER BY
+      'SELECT tipo, valor, status, criado_em FROM transacoes WHERE user_id=$1 ORDER BY criado_em DESC LIMIT 50',
       [req.user.id]
     );
     res.json({ saldo: saldo.rows[0].saldo, transacoes: txs.rows });
@@ -845,6 +849,7 @@ ado_em=
     res.status(500).json({ erro: 'Erro ao buscar carteira' });
   }
 });
+
 // ================================================================
 // ROTA DE ADMIN — painel simples (proteger com senha admin)
 // ================================================================
@@ -852,33 +857,35 @@ app.get('/admin/usuarios', async (req, res) => {
   const adminKey = req.headers['x-admin-key'];
   if (adminKey !== process.env.ADMIN_KEY)
     return res.status(403).json({ erro: 'Acesso negado' });
+
   const users = await db.query(
     'SELECT id, nome, email, saldo, criado_em FROM users ORDER BY criado_em DESC'
-);
+  );
   res.json(users.rows);
 });
+
 app.get('/admin/transacoes', async (req, res) => {
   const adminKey = req.headers['x-admin-key'];
   if (adminKey !== process.env.ADMIN_KEY)
     return res.status(403).json({ erro: 'Acesso negado' });
+
   const txs = await db.query(
-    'SELECT t.*, u.nome, u.email FROM transacoes t JOIN users u ON t.user_id=u.id ORDE
-);
+    'SELECT t.*, u.nome, u.email FROM transacoes t JOIN users u ON t.user_id=u.id ORDER BY t.criado_em DESC LIMIT 200'
+  );
   res.json(txs.rows);
 });
+
 // GET /health — verifica se servidor está online
 app.get('/health', (req, res) => res.json({ ok: true, ts: new Date() }));
+
 // ================================================================
 // INICIAR SERVIDOR
 // ================================================================
 setupDatabase().then(() => {
-app.listen(port, () => {
-console.log(` TrucoKing Server rodando na porta ${port}`);
+  app.listen(port, () => {
+    console.log(`🎉 TrucoKing Server rodando na porta ${port}`);
   });
 }).catch(err => {
   console.error('Erro ao conectar banco:', err);
   process.exit(1);
- criado
-R BY t.
-
- 
+});
