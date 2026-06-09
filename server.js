@@ -14,6 +14,9 @@ require('dotenv').config();
 const app  = express();
 const port = process.env.PORT || 3000;
 
+// Necessário para capturar o IP real do jogador atrás do proxy do Render
+app.set('trust proxy', true);
+
 // ── Middleware ────────────────────────────────────────────────
 app.use(cors({ origin: process.env.FRONTEND_URL || '*' }));
 app.use(express.json());
@@ -77,8 +80,11 @@ async function setupDatabase() {
       user_id     INTEGER REFERENCES users(id),
       dupla       INTEGER,  -- 0 ou 1
       ganhou      BOOLEAN,
+      ip          VARCHAR(60),
       premio      DECIMAL(10,2) DEFAULT 0
     );
+
+    ALTER TABLE partida_jogadores ADD COLUMN IF NOT EXISTS ip VARCHAR(60);
   `);
 
   console.log('✅ Banco de dados configurado!');
@@ -424,14 +430,33 @@ app.post('/jogo/entrar', authMiddleware, async (req, res) => {
       partida_id = partida.rows[0].id;
     }
 
+    // ── ANTIFRAUDE: impede multi-conta / mesmo IP na mesma mesa ──
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'desconhecido';
+    const jaNaMesa = await db.query(
+      'SELECT user_id, ip FROM partida_jogadores WHERE partida_id=$1',
+      [partida_id]
+    );
+    const mesmoUsuario = jaNaMesa.rows.some(j => j.user_id === req.user.id);
+    const mesmoIp      = jaNaMesa.rows.some(j => j.ip === ip);
+    if (mesmoUsuario || mesmoIp) {
+      // Estorna a entrada que foi debitada acima
+      await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [mesa_valor, req.user.id]);
+      await db.query(
+        'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+        [req.user.id, 'estorno_entrada', mesa_valor, 'aprovado']
+      );
+      console.warn(`🚨 Antifraude: bloqueio na mesa ${partida_id} — user ${req.user.id}, ip ${ip} (mesmoUsuario=${mesmoUsuario}, mesmoIp=${mesmoIp})`);
+      return res.status(403).json({ erro: 'Não é possível entrar nesta mesa no momento. Tente outra mesa.' });
+    }
+
     // Adiciona jogador
     const jogCount = await db.query(
       'SELECT COUNT(*) FROM partida_jogadores WHERE partida_id=$1', [partida_id]
     );
     const dupla = parseInt(jogCount.rows[0].count) % 2; // alterna dupla 0/1
     await db.query(
-      'INSERT INTO partida_jogadores (partida_id, user_id, dupla) VALUES ($1,$2,$3)',
-      [partida_id, req.user.id, dupla]
+      'INSERT INTO partida_jogadores (partida_id, user_id, dupla, ip) VALUES ($1,$2,$3,$4)',
+      [partida_id, req.user.id, dupla, ip]
     );
 
     res.json({ ok: true, partida_id });
