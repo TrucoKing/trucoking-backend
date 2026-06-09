@@ -413,53 +413,70 @@ app.post('/jogo/entrar', authMiddleware, async (req, res) => {
       [req.user.id, 'entrada_mesa', mesa_valor, 'aprovado']
     );
 
-    // Encontra partida aberta ou cria nova
+    const ip = req.ip || req.headers['x-forwarded-for'] || 'desconhecido';
+
+    // ── MATCHMAKING: procura mesa aberta com exatamente 1 humano esperando ──
+    // Regra economica: 2 humanos SEMPRE em duplas opostas, para que o premio
+    // de um seja bancado pela aposta do outro (casa nunca paga do bolso).
     let partida = await db.query(
-      "SELECT p.id FROM partidas p LEFT JOIN partida_jogadores pj ON p.id=pj.partida_id WHERE p.mesa_valor=$1 AND p.modo=$2 AND p.status='aberta' GROUP BY p.id HAVING COUNT(pj.id)<4 LIMIT 1",
+      `SELECT p.id, MIN(pj.dupla) AS dupla_existente, COUNT(pj.id) AS humanos
+         FROM partidas p
+         JOIN partida_jogadores pj ON p.id = pj.partida_id
+        WHERE p.mesa_valor = $1 AND p.modo = $2 AND p.status = 'aberta'
+        GROUP BY p.id
+       HAVING COUNT(pj.id) = 1
+        LIMIT 1`,
       [mesa_valor, modo]
     );
 
-    let partida_id;
-    if (partida.rows.length === 0) {
+    let partida_id, dupla;
+
+    if (partida.rows.length > 0) {
+      // Ja existe 1 humano -> este entra na dupla OPOSTA
+      partida_id = partida.rows[0].id;
+      const duplaExistente = parseInt(partida.rows[0].dupla_existente, 10);
+      dupla = duplaExistente === 0 ? 1 : 0;
+
+      // Antifraude: nao deixa o mesmo usuario/IP ocupar os dois lados
+      const jaNaMesa = await db.query(
+        'SELECT user_id, ip FROM partida_jogadores WHERE partida_id=$1', [partida_id]
+      );
+      const mesmoUsuario = jaNaMesa.rows.some(j => j.user_id === req.user.id);
+      const mesmoIp      = jaNaMesa.rows.some(j => j.ip === ip);
+      if (mesmoUsuario || mesmoIp) {
+        await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [mesa_valor, req.user.id]);
+        await db.query(
+          'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+          [req.user.id, 'estorno_entrada', mesa_valor, 'aprovado']
+        );
+        console.warn(`🚨 Antifraude: bloqueio na mesa ${partida_id} — user ${req.user.id}, ip ${ip}`);
+        return res.status(403).json({ erro: 'Não é possível entrar nesta mesa. Tente outra.' });
+      }
+
+      // Com 2 humanos a mesa fecha para novos humanos (os 2 vazios viram bots)
+      await db.query("UPDATE partidas SET status='completa' WHERE id=$1", [partida_id]);
+    } else {
+      // Nenhum humano esperando -> cria mesa nova, este fica na dupla 0
       const nova = await db.query(
         'INSERT INTO partidas (mesa_valor, modo) VALUES ($1,$2) RETURNING id',
         [mesa_valor, modo]
       );
       partida_id = nova.rows[0].id;
-    } else {
-      partida_id = partida.rows[0].id;
+      dupla = 0;
     }
 
-    // ── ANTIFRAUDE: impede multi-conta / mesmo IP na mesma mesa ──
-    const ip = req.ip || req.headers['x-forwarded-for'] || 'desconhecido';
-    const jaNaMesa = await db.query(
-      'SELECT user_id, ip FROM partida_jogadores WHERE partida_id=$1',
-      [partida_id]
-    );
-    const mesmoUsuario = jaNaMesa.rows.some(j => j.user_id === req.user.id);
-    const mesmoIp      = jaNaMesa.rows.some(j => j.ip === ip);
-    if (mesmoUsuario || mesmoIp) {
-      // Estorna a entrada que foi debitada acima
-      await db.query('UPDATE users SET saldo = saldo + $1 WHERE id=$2', [mesa_valor, req.user.id]);
-      await db.query(
-        'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
-        [req.user.id, 'estorno_entrada', mesa_valor, 'aprovado']
-      );
-      console.warn(`🚨 Antifraude: bloqueio na mesa ${partida_id} — user ${req.user.id}, ip ${ip} (mesmoUsuario=${mesmoUsuario}, mesmoIp=${mesmoIp})`);
-      return res.status(403).json({ erro: 'Não é possível entrar nesta mesa no momento. Tente outra mesa.' });
-    }
-
-    // Adiciona jogador
-    const jogCount = await db.query(
-      'SELECT COUNT(*) FROM partida_jogadores WHERE partida_id=$1', [partida_id]
-    );
-    const dupla = parseInt(jogCount.rows[0].count) % 2; // alterna dupla 0/1
     await db.query(
       'INSERT INTO partida_jogadores (partida_id, user_id, dupla, ip) VALUES ($1,$2,$3,$4)',
       [partida_id, req.user.id, dupla, ip]
     );
 
-    res.json({ ok: true, partida_id });
+    // Conta humanos confirmados na mesa (1 = jogando contra bots; 2 = duelo real)
+    const cnt = await db.query(
+      'SELECT COUNT(*) FROM partida_jogadores WHERE partida_id=$1', [partida_id]
+    );
+    const humanosNaMesa = parseInt(cnt.rows[0].count, 10);
+
+    res.json({ ok: true, partida_id, dupla, humanosNaMesa });
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao entrar na mesa' });
@@ -507,6 +524,106 @@ app.post('/jogo/resultado', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ erro: 'Erro ao registrar resultado' });
+  }
+});
+
+// ================================================================
+// ROTAS DE JOGO vs CPU (1 jogador real + 3 bots)
+// Saldo sempre confirmado pelo servidor (fonte da verdade).
+// ================================================================
+
+// POST /jogo/aposta — debita a aposta ao entrar na mesa
+app.post('/jogo/aposta', authMiddleware, async (req, res) => {
+  const valor = parseFloat(req.body.valor);
+  if (!valor || valor <= 0) return res.status(400).json({ erro: 'Valor inválido' });
+
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const r = await client.query('SELECT saldo FROM users WHERE id=$1 FOR UPDATE', [req.user.id]);
+    const saldo = parseFloat(r.rows[0].saldo);
+    if (saldo < valor) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ erro: 'Saldo insuficiente' });
+    }
+    const upd = await client.query(
+      'UPDATE users SET saldo = saldo - $1 WHERE id=$2 RETURNING saldo', [valor, req.user.id]
+    );
+    await client.query(
+      'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'entrada_mesa', valor, 'aprovado']
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, saldo: upd.rows[0].saldo });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao registrar aposta' });
+  } finally {
+    client.release();
+  }
+});
+
+// POST /jogo/estorno — devolve a aposta se a busca for cancelada
+app.post('/jogo/estorno', authMiddleware, async (req, res) => {
+  const valor = parseFloat(req.body.valor);
+  if (!valor || valor <= 0) return res.status(400).json({ erro: 'Valor inválido' });
+  try {
+    const upd = await db.query(
+      'UPDATE users SET saldo = saldo + $1 WHERE id=$2 RETURNING saldo', [valor, req.user.id]
+    );
+    await db.query(
+      'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'estorno_entrada', valor, 'aprovado']
+    );
+    res.json({ ok: true, saldo: upd.rows[0].saldo });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao estornar' });
+  }
+});
+
+// POST /jogo/premio — credita o premio ao vencer
+// REGRA ECONOMICA (casa nunca paga do bolso):
+//   pote = aposta * humanosNaMesa   (bots nao colocam dinheiro)
+//   premio_total = pote * 0.85       (15% taxa da casa)
+//   premio_por_vencedor = premio_total / humanosVencedores
+// Hoje (1 humano + bots): humanosNaMesa=1, humanosVencedores=1 -> aposta*0.85
+// Multiplayer real depois: o servidor contara pela tabela partida_jogadores.
+app.post('/jogo/premio', authMiddleware, async (req, res) => {
+  const aposta = parseFloat(req.body.aposta);
+  const ganhou = req.body.ganhou === true;
+  // quantos humanos pagantes estavam na mesa e quantos venceram
+  let humanosNaMesa     = parseInt(req.body.humanosNaMesa, 10);
+  let humanosVencedores = parseInt(req.body.humanosVencedores, 10);
+
+  if (!aposta || aposta <= 0) return res.status(400).json({ erro: 'Aposta inválida' });
+
+  // Sanitiza: no maximo 4 humanos numa mesa de truco, no minimo 1 (o proprio)
+  if (!Number.isInteger(humanosNaMesa) || humanosNaMesa < 1 || humanosNaMesa > 4) humanosNaMesa = 1;
+  if (!Number.isInteger(humanosVencedores) || humanosVencedores < 1 || humanosVencedores > humanosNaMesa) humanosVencedores = 1;
+
+  try {
+    if (!ganhou) {
+      const r = await db.query('SELECT saldo FROM users WHERE id=$1', [req.user.id]);
+      return res.json({ ok: true, saldo: r.rows[0].saldo, premio: 0 });
+    }
+
+    const TAXA = 0.85;
+    const pote = aposta * humanosNaMesa;
+    const premio = +((pote * TAXA) / humanosVencedores).toFixed(2);
+
+    const upd = await db.query(
+      'UPDATE users SET saldo = saldo + $1 WHERE id=$2 RETURNING saldo', [premio, req.user.id]
+    );
+    await db.query(
+      'INSERT INTO transacoes (user_id, tipo, valor, status) VALUES ($1,$2,$3,$4)',
+      [req.user.id, 'vitoria', premio, 'aprovado']
+    );
+    res.json({ ok: true, saldo: upd.rows[0].saldo, premio });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ erro: 'Erro ao creditar prêmio' });
   }
 });
 
