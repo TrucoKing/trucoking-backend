@@ -219,8 +219,10 @@ module.exports = function (io, deps) {
       return r;
     }
 
-    // senao, checa se a proxima vez e de um bot
-    setTimeout(() => jogarBotSeForVez(id), 1000);
+    // senao, checa se a proxima vez e de um bot.
+    // se fechou vaza, espera mais (o frontend segura a foto da vaza ~1.5s)
+    var espera = (r.evento === 'fim_de_vaza') ? 2200 : 1000;
+    setTimeout(() => jogarBotSeForVez(id), espera);
     return r;
   }
 
