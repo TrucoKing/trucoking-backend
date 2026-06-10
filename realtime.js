@@ -228,13 +228,61 @@ module.exports = function (io, deps) {
     const assento = assentos.find(a => a.pos === m.vez);
     if (!assento || assento.tipo !== 'bot') return; // nao e vez de bot
 
-    // estrategia simples (Fase 4): joga a primeira carta disponivel.
-    // (na Fase 4.1 da pra deixar o bot mais esperto, como no jogo vs CPU)
-    const mao = m.maos[m.vez];
-    const cardIdx = mao.findIndex(c => c !== null);
+    const cardIdx = escolherCartaBot(P, m.vez);
     if (cardIdx < 0) return;
 
     aplicarJogada(id, m.vez, cardIdx);
+  }
+
+  // Estrategia do bot "esperto o suficiente":
+  // - se PODE ganhar a vaza: joga a MENOR carta que ainda vence (nao gasta manilha a toa)
+  // - se NAO da pra ganhar: descarta a carta mais FRACA (guarda as boas)
+  // - se esta ABRINDO a vaza: joga uma carta mediana (nem a melhor, nem a pior)
+  function escolherCartaBot(P, pos) {
+    const m = P.mao;
+    const modo = P.modo, manilha = m.manilhaRank;
+    // cartas disponiveis na mao do bot, com indice e forca
+    const cartas = m.maos[pos]
+      .map((c, idx) => ({ idx, card: c, f: engine.forca(c, modo, manilha) }))
+      .filter(x => x.card !== null);
+    if (cartas.length === 0) return -1;
+    cartas.sort((a, b) => a.f - b.f); // da mais fraca para a mais forte
+
+    // qual a maior forca que o adversario ja botou na mesa nesta vaza?
+    const ehAdversario = (p) => (p % 2) !== (pos % 2);
+    let maxAdv = 0;
+    m.played.forEach((c, p) => {
+      if (c && ehAdversario(p)) {
+        const fc = engine.forca(c, modo, manilha);
+        if (fc > maxAdv) maxAdv = fc;
+      }
+    });
+
+    // o parceiro ja esta ganhando a vaza? entao economiza (descarta a mais fraca)
+    let maxParceiro = 0;
+    m.played.forEach((c, p) => {
+      if (c && !ehAdversario(p) && p !== pos) {
+        const fc = engine.forca(c, modo, manilha);
+        if (fc > maxParceiro) maxParceiro = fc;
+      }
+    });
+    if (maxParceiro > 0 && maxParceiro >= maxAdv) {
+      return cartas[0].idx; // parceiro ja ganha: joga a mais fraca
+    }
+
+    // abrindo a vaza (ninguem jogou ainda): carta mediana
+    const alguemJogou = m.played.some(c => c !== null);
+    if (!alguemJogou) {
+      const mid = Math.floor(cartas.length / 2);
+      return cartas[mid].idx;
+    }
+
+    // tenta ganhar: menor carta que supera o adversario
+    const vencedora = cartas.find(x => x.f > maxAdv);
+    if (vencedora) return vencedora.idx;
+
+    // nao da pra ganhar: descarta a mais fraca
+    return cartas[0].idx;
   }
 
 
