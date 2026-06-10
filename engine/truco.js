@@ -171,7 +171,9 @@ function jogarCarta(P, pos, cardIdx) {
     m.vazaWins[res.dupla]++;
     if (m.vazaNum === 0) m.primeiraVazaDupla = res.dupla;
   }
-  const vazaResultado = { ...res, vaza: m.vazaNum };
+  // foto das 4 cartas que fecharam a vaza (antes de limpar a mesa)
+  const cartasDaVaza = m.played.slice();
+  const vazaResultado = { ...res, vaza: m.vazaNum, cartas: cartasDaVaza };
 
   // prepara proxima vaza ou encerra a mao
   m.vazaNum++;
