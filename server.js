@@ -9,6 +9,8 @@ const bcrypt     = require('bcrypt');
 const jwt        = require('jsonwebtoken');
 const { Pool }   = require('pg');
 const { MercadoPagoConfig, Payment, MerchantOrder } = require('mercadopago');
+const http       = require('http');
+const { Server } = require('socket.io');
 require('dotenv').config();
 
 const app  = express();
@@ -879,11 +881,20 @@ app.get('/admin/transacoes', async (req, res) => {
 app.get('/health', (req, res) => res.json({ ok: true, ts: new Date() }));
 
 // ================================================================
-// INICIAR SERVIDOR
+// INICIAR SERVIDOR (com Socket.IO para multiplayer em tempo real)
 // ================================================================
+const httpServer = http.createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: process.env.FRONTEND_URL || '*' }
+});
+
+// Liga o multiplayer (Fase 2). O modulo cuida das salas e eventos.
+require('./realtime')(io, { db, jwt });
+
 setupDatabase().then(() => {
-  app.listen(port, () => {
+  httpServer.listen(port, () => {
     console.log(`🎉 TrucoKing Server rodando na porta ${port}`);
+    console.log(`🔌 Socket.IO (multiplayer) ativo`);
   });
 }).catch(err => {
   console.error('Erro ao conectar banco:', err);
