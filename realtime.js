@@ -177,13 +177,19 @@ module.exports = function (io, deps) {
     const r = engine.jogarCarta(P, pos, cardIdx);
     if (!r.ok) return r; // jogada invalida (ex: nao era a vez)
 
+    // monta o estado; se fechou vaza, usa a FOTO das cartas (antes de limpar)
+    var est = estadoPublico(sala);
+    if (r.evento === 'fim_de_vaza' && r.vaza && r.vaza.cartas) {
+      est = Object.assign({}, est, { played: r.vaza.cartas }); // mostra as 4 cartas
+    }
+
     // avisa todos: alguem jogou uma carta
     io.to(id).emit('jogada_feita', {
       pos,
       evento: r.evento,
       vaza: r.vaza || null,
       fimDaMao: r.fimDaMao || null,
-      estado: estadoPublico(sala),
+      estado: est,
     });
 
     // fim da mao? inicia a proxima (se a partida nao acabou)
