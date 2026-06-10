@@ -143,6 +143,7 @@ module.exports = function (io, deps) {
         vez: P.mao.vez,              // de quem e a vez de jogar
         lugares,
         placar: P.jogos,
+        score: P.score,
       });
     });
 
