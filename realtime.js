@@ -1,11 +1,10 @@
 // ============================================================
-// TrucoKing — Multiplayer em tempo real (Fases 2 + 3)
+// TrucoKing — Multiplayer em tempo real (Fases 2 + 3 + 4)
 //
-// Fase 2: conexao, autenticacao e SALAS (ja funcionando).
-// Fase 3: quando 2 HUMANOS entram numa mesa, o servidor:
-//   - monta os assentos (humanos em duplas OPOSTAS, bots no resto)
-//   - cria a partida com a engine e distribui as cartas
-//   - envia para cada humano APENAS a mao dele (anti-trapaca)
+// Fase 2: conexao, autenticacao e SALAS.
+// Fase 3: com 2 humanos, monta assentos, cria partida e distribui cartas.
+// Fase 4: recebe a jogada do humano (jogar_carta), valida pela engine,
+//   transmite o resultado, e faz os BOTS jogarem na vez deles.
 //
 // Assentos: 0 e 2 = dupla NOS; 1 e 3 = dupla ELES.
 // Os 2 humanos ficam em 0 e 1 (duplas opostas); 2 e 3 viram bots.
@@ -78,6 +77,20 @@ module.exports = function (io, deps) {
       });
     });
 
+    // FASE 4: humano joga uma carta
+    socket.on('jogar_carta', ({ cardIdx }) => {
+      const id = socket.salaAtual;
+      if (!id || !salas[id] || !salas[id].partida) return;
+      const { assentos } = salas[id].partida;
+      // descobre a posicao (assento) deste jogador
+      const meu = assentos.find(a => a.tipo === 'humano' && a.id === socket.user.id);
+      if (!meu) return;
+      const r = aplicarJogada(id, meu.pos, cardIdx);
+      if (r && !r.ok) {
+        socket.emit('jogada_recusada', { erro: r.erro });
+      }
+    });
+
     // sair da mesa
     socket.on('sair_mesa', () => sairDaSala(socket));
 
@@ -134,7 +147,96 @@ module.exports = function (io, deps) {
     });
 
     console.log(`🃏 Partida iniciada em ${id} (modo ${P.modo}) — cartas distribuidas`);
+
+    // se a vez ja comeca num bot, ele joga
+    setTimeout(() => jogarBotSeForVez(id), 1200);
   }
+
+  // monta o estado PUBLICO da mesa (sem revelar as maos dos jogadores)
+  function estadoPublico(sala) {
+    const { P } = sala.partida;
+    const m = P.mao;
+    return {
+      played: m.played,        // cartas na mesa (visiveis a todos)
+      vez: m ? m.vez : null,
+      vazaNum: m ? m.vazaNum : 0,
+      placar: P.jogos,
+      score: P.score,
+      valendo: P.valendo,
+      finalizada: P.finalizada,
+      vencedor: P.vencedor,
+    };
+  }
+
+  // aplica uma jogada (de humano ou bot) e transmite o resultado
+  function aplicarJogada(id, pos, cardIdx) {
+    const sala = salas[id];
+    if (!sala || !sala.partida) return;
+    const { P } = sala.partida;
+
+    const r = engine.jogarCarta(P, pos, cardIdx);
+    if (!r.ok) return r; // jogada invalida (ex: nao era a vez)
+
+    // avisa todos: alguem jogou uma carta
+    io.to(id).emit('jogada_feita', {
+      pos,
+      evento: r.evento,
+      vaza: r.vaza || null,
+      fimDaMao: r.fimDaMao || null,
+      estado: estadoPublico(sala),
+    });
+
+    // fim da mao? inicia a proxima (se a partida nao acabou)
+    if (r.fimDaMao) {
+      if (P.finalizada) {
+        io.to(id).emit('partida_finalizada', { vencedor: P.vencedor, placar: P.jogos });
+        sala.partida = null;
+        return r;
+      }
+      // nova mao apos um respiro
+      setTimeout(() => {
+        engine.novaMao(P);
+        // reenvia as novas maos privadas para cada humano
+        sala.partida.assentos.forEach(a => {
+          if (a.tipo !== 'humano') return;
+          io.to(a.socketId).emit('nova_mao', {
+            suaMao: P.mao.maos[a.pos],
+            vira: P.mao.vira,
+            manilha: P.mao.manilhaRank,
+            vez: P.mao.vez,
+            estado: estadoPublico(sala),
+          });
+        });
+        setTimeout(() => jogarBotSeForVez(id), 1200);
+      }, 2500);
+      return r;
+    }
+
+    // senao, checa se a proxima vez e de um bot
+    setTimeout(() => jogarBotSeForVez(id), 1000);
+    return r;
+  }
+
+  // se a vez atual for de um bot, ele escolhe uma carta e joga
+  function jogarBotSeForVez(id) {
+    const sala = salas[id];
+    if (!sala || !sala.partida) return;
+    const { P, assentos } = sala.partida;
+    const m = P.mao;
+    if (!m || m.encerrada) return;
+
+    const assento = assentos.find(a => a.pos === m.vez);
+    if (!assento || assento.tipo !== 'bot') return; // nao e vez de bot
+
+    // estrategia simples (Fase 4): joga a primeira carta disponivel.
+    // (na Fase 4.1 da pra deixar o bot mais esperto, como no jogo vs CPU)
+    const mao = m.maos[m.vez];
+    const cardIdx = mao.findIndex(c => c !== null);
+    if (cardIdx < 0) return;
+
+    aplicarJogada(id, m.vez, cardIdx);
+  }
+
 
   function sairDaSala(socket) {
     const id = socket.salaAtual;
@@ -159,5 +261,5 @@ module.exports = function (io, deps) {
     if (sala.jogadores.length === 0) delete salas[id];
   }
 
-  console.log('✅ Multiplayer (Fases 2+3) carregado');
+  console.log('✅ Multiplayer (Fases 2+3+4) carregado');
 };
