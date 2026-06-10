@@ -214,7 +214,7 @@ module.exports = function (io, deps) {
             estado: estadoPublico(sala),
           });
         });
-        setTimeout(() => jogarBotSeForVez(id), 1200);
+        setTimeout(() => jogarBotSeForVez(id), 2000);
       }, 2500);
       return r;
     }
