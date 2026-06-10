@@ -14,8 +14,8 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "mercadopago": "^2.0.15",
-    "pg": "^8.11.5"
-  },
+    "pg": "^8.11.5",
+    “socket.io”: “^4.7.5”  },
   "devDependencies": {
     "nodemon": "^3.1.0"
   },
